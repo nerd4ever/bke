@@ -224,26 +224,25 @@ modprobe br_netfilter
 sysctl --system
 EOF
 
+mkdir -p "${STAGE_DIR}/etc/crio"
 cat <<EOF > ${STAGE_DIR}/etc/crio/crio.conf
 [crio.runtime]
 conmon_cgroup = "pod"
 cgroup_manager = "cgroupfs"
 EOF
+
+mkdir -p "${STAGE_DIR}/etc/modules-load.d"
 # @see https://kubernetes.io/pt-br/docs/setup/production-environment/tools/kubeadm/install-kubeadm/
 cat <<EOF >${STAGE_DIR}/etc/modules-load.d/bke.conf
 overlay
 br_netfilter
 EOF
 
-cat <<EOF > ${STAGE_DIR}/etc/sysctl.d/99-kubernetes-cri.conf
+mkdir -p "${STAGE_DIR}/etc/sysctl.d"
+cat <<EOF > ${STAGE_DIR}/etc/sysctl.d/99-bke.conf
 net.bridge.bridge-nf-call-iptables  = 1
 net.ipv4.ip_forward                 = 1
 net.bridge.bridge-nf-call-ip6tables = 1
-EOF
-
-cat <<EOF >${STAGE_DIR}/etc/sysctl.d/k8s.conf
-net.bridge.bridge-nf-call-ip6tables = 1
-net.bridge.bridge-nf-call-iptables = 1
 EOF
 
 chmod 755 ${STAGE_DIR}/DEBIAN/control
