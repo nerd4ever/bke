@@ -33,9 +33,9 @@ Priority: extra
 Section: net
 Maintainer: Nerd4ever <support@nerd4ever.com.br>
 Version: @VERSION@
-Depends: tzdata, ntp, openssh-server, kubelet, kubeadm, kubectl, containerd
+Depends: tzdata, ntp, openssh-server, kubelet, kubeadm, kubectl, containerd, helm
 Suggests: vim
-Pre-Depends: apt-transport-https, ca-certificates, procps, kmod, gnupg , firewalld, curl, lsb-release
+Pre-Depends: apt-transport-https, ca-certificates, procps, kmod, gnupg , firewalld, curl, lsb-release, portmap
 Description: Nerd4ever Bare Metal Kubernetes Engine (BKE) is a meta package to provide a complete environment for managing a production kubernetes cluster using OpenSource 
 EOF
 echo "Architecture: ${ARCH}" >>${STAGE_DIR}/DEBIAN/control
@@ -238,6 +238,73 @@ overlay
 br_netfilter
 EOF
 
+cat <<EOF > ${STAGE_DIR}/etc/nerd4ever/bke/cluster-uninstall
+weave reset
+rm -fr /opt/cni/bin/weave-*
+kubeadm reset --force
+EOF
+cat <<EOF > ${STAGE_DIR}/etc/nerd4ever/bke/cluster-install
+#!/bin/bash
+# Nerd4ever Bare Metal Kubernetes Engine (BKE)
+# --------------------------
+# Install Cluster
+# @see https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/
+# --------------------------
+kubeadm init
+mkdir -p $HOME/.kube
+cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+chown $(id -u):$(id -g) $HOME/.kube/config
+#
+kubectl taint nodes --all node-role.kubernetes.io/master-
+# --------------------------
+# Install WaveNet
+# --------------------------
+kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
+#
+# --------------------------
+# Install Metal Load Balance
+# @see https://metallb.universe.tf/installation/
+# --------------------------
+kubectl get configmap kube-proxy -n kube-system -o yaml | \
+sed -e "s/strictARP: false/strictARP: true/" | \
+kubectl diff -f - -n kube-system
+#
+# actually apply the changes, returns nonzero returncode on errors only
+kubectl get configmap kube-proxy -n kube-system -o yaml | \
+sed -e "s/strictARP: false/strictARP: true/" | \
+kubectl apply -f - -n kube-system
+#
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.12.1/manifests/namespace.yaml
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.12.1/manifests/metallb.yaml
+#
+# --------------------------
+# Install Cert Manager
+# @see https://cert-manager.io/docs/installation/helm/#2-update-your-local-helm-chart-repository-cache
+# --------------------------
+helm repo add jetstack https://charts.jetstack.io
+helm repo update
+helm install \
+  cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --version v1.8.0 \
+  --set installCRDs=true
+#
+# Install Ingress
+helm repo add haproxy-ingress https://haproxy-ingress.github.io/charts
+helm repo update
+helm install haproxy-ingress haproxy-ingress/haproxy-ingress\
+  --create-namespace --namespace ingress-controller\
+  --version 0.13.6\
+  -f /etc/nerd4ever/bke/others/haproxy-ingress-values.yaml
+EOF
+
+mkdir -p "${STAGE_DIR}/etc/nerd4ever/bke/others/"
+cat <<EOF > ${STAGE_DIR}/etc/nerd4ever/bke/others/haproxy-ingress-values.yaml
+controller:
+  hostNetwork: true
+EOF
+
 mkdir -p "${STAGE_DIR}/etc/sysctl.d"
 cat <<EOF > ${STAGE_DIR}/etc/sysctl.d/99-bke.conf
 net.bridge.bridge-nf-call-iptables  = 1
@@ -245,6 +312,8 @@ net.ipv4.ip_forward                 = 1
 net.bridge.bridge-nf-call-ip6tables = 1
 EOF
 
+chmod +x ${STAGE_DIR}/etc/nerd4ever/bke/cluster-install
+chmod +x ${STAGE_DIR}/etc/nerd4ever/bke/cluster-uninstall
 chmod 755 ${STAGE_DIR}/DEBIAN/control
 chmod 755 ${STAGE_DIR}/DEBIAN/postinst
 chmod 755 ${STAGE_DIR}/DEBIAN/prerm
